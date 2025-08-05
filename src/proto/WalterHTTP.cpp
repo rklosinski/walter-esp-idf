@@ -228,6 +228,7 @@ bool WalterModem::httpQuery(
     _returnAfterReply();
 }
 
+
 bool WalterModem::httpSend(
     uint8_t profileId,
     const char *uri,
@@ -237,6 +238,8 @@ bool WalterModem::httpSend(
     WalterModemHttpPostParam httpPostParam,
     char *contentTypeBuf,
     uint16_t contentTypeBufSize,
+    char *extraHeader,
+    uint16_t authHeaderSize,
     WalterModemRsp *rsp,
     walterModemCb cb,
     void *args)
@@ -260,27 +263,54 @@ bool WalterModem::httpSend(
         }
     };
 
-    WalterModemBuffer *stringsBuffer = _getFreeBuffer();
-    if (httpPostParam == WALTER_MODEM_HTTP_POST_PARAM_UNSPECIFIED) {
-        stringsBuffer->size += sprintf(
-            (char *)stringsBuffer->data,
-            "AT+SQNHTTPSND=%d,%d,\"%s\",%d",
-            profileId,
-            httpSendCmd,
-            uri,
-            dataSize);
-    } else {
-        stringsBuffer->size += sprintf(
-            (char *)stringsBuffer->data,
-            "AT+SQNHTTPSND=%d,%d,\"%s\",%d,\"%d\"",
-            profileId,
-            httpSendCmd,
-            uri,
-            dataSize,
-            httpPostParam);
-    }
+	WalterModemBuffer *stringsBuffer = _getFreeBuffer();
+	if (httpPostParam == WALTER_MODEM_HTTP_POST_PARAM_UNSPECIFIED) {
+		if (extraHeader == NULL) {
+			stringsBuffer->size += sprintf(
+				(char *)stringsBuffer->data,
+				"AT+SQNHTTPSND=%d,%d,\"%s\",%d",
+				profileId,
+				httpSendCmd,
+				uri,
+				dataSize);
+		}
+		else {
+			stringsBuffer->size += sprintf(
+				(char *)stringsBuffer->data,
+				"AT+SQNHTTPSND=%d,%d,\"%s\",%d,\"%d\",\"%s\"",
+				profileId,
+				httpSendCmd,
+				uri,
+				dataSize,
+				WALTER_MODEM_HTTP_POST_PARAM_UNSPECIFIED,
+				extraHeader);
+		}
+	}
+	else {
+		if (extraHeader == NULL) {
+			stringsBuffer->size += sprintf(
+				(char *)stringsBuffer->data,
+				"AT+SQNHTTPSND=%d,%d,\"%s\",%d,\"%d\"",
+				profileId,
+				httpSendCmd,
+				uri,
+				dataSize,
+				httpPostParam);
+		}
+		else {
+			stringsBuffer->size += sprintf(
+				(char *)stringsBuffer->data,
+				"AT+SQNHTTPSND=%d,%d,\"%s\",%d,\"%d\",\"%s\"",
+				profileId,
+				httpSendCmd,
+				uri,
+				dataSize,
+				httpPostParam,
+				extraHeader);
+		}
+	}
 
-    _runCmd(
+	_runCmd(
         arr((const char *)stringsBuffer->data),
         "OK",
         rsp,

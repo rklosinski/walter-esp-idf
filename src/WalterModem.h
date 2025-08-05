@@ -4289,6 +4289,8 @@ public:
      * @param httpPostParam content type (enum value)
      * @param contentTypeBuf Optional user buffer to store content type header in.
      * @param contentTypeBufSize Size of the user buffer, including terminating null byte.
+     * @param authHeader Optional user buffer to store the Authorization header in.
+     * @param authHeaderSize Size of the user buffer, including terminating null byte.
      * @param rsp Optional modem response structure to save the result in.
      * @param cb Optional callback function, if set this function will not block.
      * @param args Optional argument to pass to the callback.
@@ -4304,6 +4306,8 @@ public:
         WalterModemHttpPostParam httpPostParam = WALTER_MODEM_HTTP_POST_PARAM_UNSPECIFIED,
         char *contentTypeBuf = NULL,
         uint16_t contentTypeBufSize = 0,
+        char *extraHeader = NULL,
+        uint16_t extraHeaderSize = 0,
         WalterModemRsp *rsp = NULL,
         walterModemCb cb = NULL,
         void *args = NULL);
