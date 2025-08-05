@@ -103,3 +103,87 @@ This is the Changelog for WalterModem
 ### Bug Fixes
 
 - fixed bug where tlsWriteCredential is private, `again`
+
+## [v1.3.2](https://github.com/QuickSpot/walter-esp-idf/releases/tag/v1.3.2)
+
+### Features
+
+- feat(socket): add datareceived param to socketReceive. ([#86](https://github.com/QuickSpot/walter-esp-idf/pull/86))
+- feat(socket): add receive example + (fix required bugs) ([#88](https://github.com/QuickSpot/walter-esp-idf/pull/88))
+- feat(socket): add arduino example ([#49](https://github.com/QuickSpot/walter-arduino/pull/49))
+
+
+
+### Bug Fixes
+
+- fix(MQTT): mqttConfig function, prevent trailing commas when no TLS profile is used ([#78](https://github.com/QuickSpot/walter-esp-idf/pull/78))
+
+- fix(modem) get network reg state ([#79](https://github.com/QuickSpot/walter-esp-idf/pull/79))
+- fix(modem) compilation warnings ([#81](https://github.com/QuickSpot/walter-esp-idf/pull/81))
+- fix(modem) define should be constexpr ([#82](https://github.com/QuickSpot/walter-esp-idf/pull/82))
+- fix(socket): issue memcpy in socket urc handler ([#84](https://github.com/QuickSpot/walter-esp-idf/pull/84))
+- fix(socket): bug where didRIng flag was not reset ([#90](https://github.com/QuickSpot/walter-esp-idf/pull/90))
+- fix(socket): didRing flag not reset when reading using dataview mode ([#92](https://github.com/QuickSpot/walter-esp-idf/pull/92))
+- fix(parser): update uart_config flow control treshhold ([#93](https://github.com/QuickSpot/walter-esp-idf/pull/93))
+- fix(parser): buffer was not null on reset ([#97](https://github.com/QuickSpot/walter-esp-idf/pull/97))
+- fix(parser): update params ([#48](https://github.com/QuickSpot/walter-arduino/pull/48))
+- fix(parser): buffer was not null on reset ([#97](https://github.com/QuickSpot/walter-esp-idf/pull/97))
+
+## [v1.3.3](https://github.com/QuickSpot/walter-esp-idf/releases/tag/v1.3.3)
+
+### Bug Fixes
+
+- fix(nvm): _tlsIsCredentialPresent ([#99](https://github.com/QuickSpot/walter-esp-idf/pull/99))
+- fix(modem): socket receive + general bug fixes ([#102](https://github.com/QuickSpot/walter-esp-idf/pull/102))
+- fix(socket): example updated begin function ([#58](https://github.com/QuickSpot/walter-arduino/pull/58))
+- fix(walterfeels): updated walterfeels example ([#52](https://github.com/QuickSpot/walter-arduino/pull/52))
+- fix(http): wrong int type in httpring handler ([#54](https://github.com/QuickSpot/walter-arduino/pull/54))
+- fix(parser): dataPrompt bug where modem could hang
+
+## [v1.4.0](https://github.com/QuickSpot/walter-esp-idf/releases/tag/v1.4.0)
+
+### Features
+
+- feat(http): added support for extra header line ([#106](https://github.com/QuickSpot/walter-esp-idf/pull/106))
+- feat(bluecherry psm example): BlueCherry example update with deepsleep and PSM ([#109](https://github.com/QuickSpot/walter-esp-idf/pull/109))
+- feat(bluecherry-coap-restructure): bluecherry coap messages via udp modem sockets ([#62](https://github.com/QuickSpot/walter-arduino/pull/62))
+
+
+### Bug Fixes
+
+- fix(socket): added NO CARRIER support for socketDial ([#108](https://github.com/QuickSpot/walter-esp-idf/pull/108))
+- fix(modem): fixed NO CARRIER bug _finishQueueCMd ([#110](https://github.com/QuickSpot/walter-esp-idf/pull/110))
+- fix(examples): add socket config tls ([#111](https://github.com/QuickSpot/walter-esp-idf/pull/111))
+- fix(socket-tls-examples): updated examples to disable tls by default ([#63](https://github.com/QuickSpot/walter-arduino/pull/63))
+- fix(bluecherry): bluecherry port was not properly set (replaced by CONFIG macro)
+
+## [v1.4.1](https://github.com/QuickSpot/walter-esp-idf/releases/tag/v1.4.1)
+
+### Features
+
+- feat(socket): socketGetState, _socketUpdateStates ([#117](https://github.com/QuickSpot/walter-esp-idf/pull/117))
+- feat(socket): add socket resume ([#118](https://github.com/QuickSpot/walter-esp-idf/pull/118))
+
+### Bug Fixes
+
+- fix(bluecherry-example): Remove delay before deep sleep ([#68](https://github.com/QuickSpot/walter-arduino/pull/68))
+- fix(bluecherry, parser): reworked bluecherry reconnect implementation and RX parser logic ([#69](https://github.com/QuickSpot/walter-arduino/pull/69))
+- fix(parser): ignoring unused variables in sscanf ([#70](https://github.com/QuickSpot/walter-arduino/pull/70))
+- fix(watchdogt): wdt upgraded to uint16_t type ([#71](https://github.com/QuickSpot/walter-arduino/pull/71))
+- fix(parser): warning logs based on time out or error, showing retry attempt ([#73](https://github.com/QuickSpot/walter-arduino/pull/73))
+- fix(parser): expected payload size as fallback to received payload length parser ([#74](https://github.com/QuickSpot/walter-arduino/pull/74))
+- fix(socket): socket->dataAvailable was accidentally removed ([#75](https://github.com/QuickSpot/walter-arduino/pull/75))
+- fix(examples): timeout refactor on network connection logic ([#77](https://github.com/QuickSpot/walter-arduino/pull/77))
+- fix(examples) timeout network connection refactor ([#78](https://github.com/QuickSpot/walter-arduino/pull/78))
+
+- fix(example): removed excess bluecherry init after sync fail ([#119](https://github.com/QuickSpot/walter-esp-idf/pull/119))
+- fix(example): default coap profile = 1 ([#120](https://github.com/QuickSpot/walter-esp-idf/pull/120))
+- fix(examples): updated timeout on network connection logic ([#121](https://github.com/QuickSpot/walter-esp-idf/pull/121))
+
+## [v1.4.2](https://github.com/QuickSpot/walter-esp-idf/releases/tag/v1.4.2)
+
+### Bug Fixes
+
+- fix(bluecherry): task delay and publish buffer ([#82](https://github.com/QuickSpot/walter-arduino/pull/82))
+
+- fix(uart): hardware flow control threshold ([#123](https://github.com/QuickSpot/walter-esp-idf/pull/123))

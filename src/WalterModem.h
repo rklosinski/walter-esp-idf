@@ -49,10 +49,16 @@
 #include <bitset>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 
 #ifdef ARDUINO
-    #include <Arduino.h>
+    #undef ARDUINO_SERIAL_EVENT_TASK_STACK_SIZE
+    #define ARDUINO_SERIAL_EVENT_TASK_STACK_SIZE 4096
+    #undef CONFIG_ARDUINO_SERIAL_EVENT_TASK_STACK_SIZE
+    #define CONFIG_ARDUINO_SERIAL_EVENT_TASK_STACK_SIZE 4096
+#include <Arduino.h>
+
 #else
     #include "sdkconfig.h"
     #ifndef CONFIG_WALTER_MODEM_KCONFIG
@@ -61,6 +67,13 @@
 for efficient configuration management."
     #endif
 #endif
+
+#pragma region WARNING_MACROS
+#ifndef DISABLE_USED_WARNING
+    #define DISABLE_USED_WARNING __attribute__((unused))
+#endif
+#pragma endregion
+
 #pragma region CONFIG_MACRO
 #ifdef CONFIG_WALTER_MODEM_KCONFIG
     #define CONFIG(name, type, default_value) static constexpr type name = CONFIG_##name;
@@ -88,16 +101,16 @@ for efficient configuration management."
         #define CONFIG_WALTER_MODEM_ENABLE_COAP 1
     #endif
 
-    #ifndef CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
-        #define CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY 1
+    #ifndef CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
+        #define CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY 1
     #endif
 
     #ifndef CONFIG_WALTER_MODEM_ENABLE_MOTA
         #define CONFIG_WALTER_MODEM_ENABLE_MOTA 1
     #endif
 
-    #ifndef CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
-        #define CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY 1
+    #ifndef CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
+        #define CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY 1
     #endif
 #endif
 
@@ -227,13 +240,30 @@ CONFIG_UINT8(WALTER_MODEM_MAX_TLS_PROFILES, 6)
  * @brief The maximum number of sockets.
  */
 CONFIG_UINT8(WALTER_MODEM_MAX_SOCKETS, 6)
+
+/**
+ * @brief The maximum number of rings a socket profile will store.
+ */
+CONFIG_UINT8(WALTER_MODEM_MAX_SOCKET_RINGS, 8)
+
+/**
+ * @brief The size in bytes of the task queue.
+ */
+#define WALTER_MODEM_SOCKET_RING_QUEUE_SIZE \
+    WALTER_MODEM_MAX_SOCKET_RINGS * sizeof(WalterModemSocketRing)
 #endif
 
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
 /**
  * @brief The default hostname for Bluecherry.
  */
-CONFIG(WALTER_MODEM_BLUE_CHERRY_HOSTNAME, const char *, "coap.bluecherry.io")
+CONFIG(WALTER_MODEM_BLUECHERRY_HOSTNAME, const char *, "coap.bluecherry.io")
+
+/**
+ * @brief The default port for Bluecherry CoAP.
+ */
+CONFIG(WALTER_MODEM_BLUECHERRY_PORT, uint16_t, 5684)
+
 #endif
 
 /**
@@ -295,16 +325,18 @@ CONFIG_UINT8(WALTER_MODEM_MQTT_MIN_PREF_KEEP_ALIVE, 20)
 CONFIG_UINT8(WALTER_MODEM_MQTT_MAX_TOPICS, 4)
 #endif
 
+//The following variables are fixed by bluecherry
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
 /**
  * @brief The maximum size of an incoming protocol message payload.
  */
-#define WALTER_MODEM_MAX_INCOMING_MESSAGE_LEN 1220
+constexpr uint16_t WALTER_MODEM_MAX_INCOMING_MESSAGE_LEN = 1220;
 
 /**
  * @brief The maximum size of an outgoing message payload.
  */
-#define WALTER_MODEM_MAX_OUTGOING_MESSAGE_LEN 1024
-
+constexpr uint16_t WALTER_MODEM_MAX_OUTGOING_MESSAGE_LEN = 1024;
+#endif
 /**
  * @brief Encrypted block size within flash.
  */
@@ -809,9 +841,13 @@ typedef enum {
     WALTER_MODEM_SOCKET_STATE_FREE = 0,
     WALTER_MODEM_SOCKET_STATE_RESERVED = 1,
     WALTER_MODEM_SOCKET_STATE_CONFIGURED = 2,
-    WALTER_MODEM_SOCKET_STATE_OPENED = 3,
-    WALTER_MODEM_SOCKET_STATE_LISTENING = 4,
-    WALTER_MODEM_SOCKET_STATE_CLOSED = 5
+    WALTER_MODEM_SOCKET_STATE_CLOSED = 3,
+    WALTER_MODEM_SOCKET_STATE_OPENED = 4,
+    WALTER_MODEM_SOCKET_STATE_PENDING_NO_DATA = 5,
+    WALTER_MODEM_SOCKET_STATE_PENDING_WITH_DATA = 6,
+    WALTER_MODEM_SOCKET_STATE_LISTENING = 7,
+    WALTER_MODEM_SOCKET_STATE_INCOMMING_CONNECTION = 8,
+    WALTER_MODEM_SOCKET_STATE_SUSPENDED = 9
 } WalterModemSocketState;
 
 /**
@@ -837,8 +873,7 @@ typedef enum {
  */
 typedef enum {
     WALTER_MODEM_SOCKET_RING_MODE_NORMAL = 0,
-    WALTER_MODEM_SOCKET_RING_MODE_DATA_AMOUNT = 1,
-    WALTER_MODEM_SOCKET_RING_MODE_DATA_VIEW = 2
+    WALTER_MODEM_SOCKET_RING_MODE_DATA_AMOUNT = 1
 } WalterModemSocketRingMode;
 
 /**
@@ -1128,19 +1163,41 @@ typedef enum {
 #endif
 #pragma endregion
 
-#pragma region BLUE_CHERRY
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#pragma region BLUECHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
+
+#define WALTER_MODEM_BLUECHERRY_COAP_HEADER_SIZE 5
+
 /**
  * @brief The possible statuses of a BlueCherry communication cycle.
  */
 typedef enum {
-    WALTER_MODEM_BLUECHERRY_STATUS_NOT_PROVISIONED,
+    WALTER_MODEM_BLUECHERRY_STATUS_NOT_CONNECTED,
     WALTER_MODEM_BLUECHERRY_STATUS_IDLE,
     WALTER_MODEM_BLUECHERRY_STATUS_AWAITING_RESPONSE,
     WALTER_MODEM_BLUECHERRY_STATUS_RESPONSE_READY,
     WALTER_MODEM_BLUECHERRY_STATUS_PENDING_MESSAGES,
-    WALTER_MODEM_BLUECHERRY_STATUS_TIMED_OUT
+    WALTER_MODEM_BLUECHERRY_STATUS_TIMED_OUT,
+    WALTER_MODEM_BLUECHERRY_STATUS_NOT_PROVISIONED
 } WalterModemBlueCherryStatus;
+
+/**
+ * @brief The possible statuses of the custom BlueCherry CoAP protocol.
+ */
+typedef enum {
+    WALTER_MODEM_BLUECHERRY_COAP_RSP_VALID = 0x43,
+    WALTER_MODEM_BLUECHERRY_COAP_RSP_CONTINUE = 0x61
+} WalterModemBlueCherryCoapRspStatus;
+
+/**
+ * @brief The possible send types of the custom BlueCherry CoAP protocol.
+ */
+typedef enum {
+    WALTER_MODEM_BLUECHERRY_COAP_SEND_TYPE_CON = 0,
+    WALTER_MODEM_BLUECHERRY_COAP_SEND_TYPE_NON = 1,
+    WALTER_MODEM_BLUECHERRY_COAP_SEND_TYPE_ACK = 2,
+    WALTER_MODEM_BLUECHERRY_COAP_SEND_TYPE_RST = 3
+} WalterModemBlueCherryCoapSendType;
 
 /**
  * @brief The possible types of BlueCherry events.
@@ -1816,8 +1873,8 @@ typedef struct {
 
 /* protocol structs: SOCKET, HTTP, MQTT, COAP, BLUECHERRY */
 #pragma region PROTO
-#pragma region BLUE_CHERRY
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#pragma region BLUECHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
 /**
  * @brief This structure contains one of possibly multiple BlueCherry messages delivered in a CoAP
  * datagram.
@@ -1868,6 +1925,17 @@ typedef struct {
  * @brief This structure represents the state of the BlueCherry connection.
  */
 typedef struct {
+    //TODO: save CoAP specific state here
+    /**
+     * @brief CoAP message id of the message being composed or sent. Start at 1, 0 is invalid.
+     */
+    uint16_t curMessageId = 1;
+
+    /**
+     * @brief The UDP socket ID of the bluecherry CoAP socket.
+     */
+    int bcSocketId = 0;
+
     /**
      * @brief The TLS profile used by the BlueCherry connection.
      */
@@ -1889,9 +1957,11 @@ typedef struct {
     uint8_t messageOut[WALTER_MODEM_MAX_OUTGOING_MESSAGE_LEN];
 
     /**
-     * @brief Length of the CoAP message being composed so far (containing a client id initially)
+     * @brief Length of the CoAP message being composed so far
+     * 
+     * Reserved space for CoAP headers on initial boot without token.
      */
-    uint16_t messageOutLen = 1;
+    uint16_t messageOutLen = 5;
 
     /**
      * @brief Buffer for the incoming CoAP message.
@@ -1902,11 +1972,6 @@ typedef struct {
      * @brief Length of the incoming CoAP message.
      */
     uint16_t messageInLen = 0;
-
-    /**
-     * @brief CoAP message id of the message being composed or sent. Start at 1, 0 is invalid.
-     */
-    uint16_t curMessageId = 1;
 
     /**
      * @brief Last acknowledged message id, 0 means nothing received yet.
@@ -2189,7 +2254,7 @@ typedef struct {
     /**
      * @brief Last incoming ring: http status code
      */
-    uint8_t httpStatus;
+    uint16_t httpStatus;
 
     /**
      * @brief Last incoming ring: length
@@ -2211,6 +2276,21 @@ typedef struct {
 
 #pragma region SOCKETS
 #if CONFIG_WALTER_MODEM_ENABLE_SOCKETS
+/**
+ * @brief this structure represents a modem socket ring URC
+ */
+typedef struct {
+    /**
+     * @brief profile id of the ring
+     */
+    uint8_t profileId = 0;
+
+    /**
+     * @brief size of the ring message (data amount)
+     */
+    uint16_t ringSize = 0;
+} WalterModemSocketRing;
+
 /**
  * @brief This structure represents a socket.
  */
@@ -2284,19 +2364,9 @@ typedef struct {
     uint16_t localPort = 0;
 
     /**
-     * @brief Has the listening socket received a ring URC.
+     * @brief amount of data available from the modem.
      */
-    bool didRing = false;
-
-    /**
-     * @brief Data amount received (0-1500)
-     */
-    uint16_t dataReceived;
-
-    /**
-     * @brief Data received (0-1500)
-     */
-    uint8_t data[1500];
+    uint16_t dataAvailable = 0;
 } WalterModemSocket;
 #endif
 #pragma endregion
@@ -2479,7 +2549,7 @@ union WalterModemRspData {
      * @brief The modem identity.
      */
     WalterModemIdentity identity;
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /**
      * @brief The BlueCherry data
      */
@@ -2756,6 +2826,23 @@ typedef struct {
     uint8_t mem[WALTER_MODEM_TASK_QUEUE_SIZE] = {0};
 } WalterModemTaskQueue;
 
+typedef struct {
+    /**
+     * @brief The queue handle.
+     */
+    QueueHandle_t handle;
+
+    /**
+     * @brief The memory handle.
+     */
+    StaticQueue_t memHandle;
+
+    /**
+     * @brief The statically allocated queue memory.
+     */
+    uint8_t mem[WALTER_MODEM_SOCKET_RING_QUEUE_SIZE] = {0};
+} WalterModemSocketRingQueue;
+
 /**
  * @brief This structure represents the command queue. This queue is used inside the libraries
  * processing task to manage incoming and pending commands.
@@ -2839,17 +2926,19 @@ private:
     /**
      * @brief boolean for when we are doing a hardware reset.
      */
-    static inline bool _receiving = false;
+    static inline bool _receivingPayload = false;
 
     static inline bool _foundCRLF = false;
 
     static inline size_t currentCRLF = 0;
 
-    static inline size_t _receiveExpected = true;
+    static inline size_t _receivedPayloadSize = 0;
+
+    static inline size_t _expectedPayloadSize = 0;
     /**
      * @brief We remember the configured watchdog timeout.
      */
-    static inline uint8_t _watchdogTimeout = false;
+    static inline uint16_t _watchdogTimeout = false;
 #ifdef ARDUINO
     /**
      * @brief The hardware serial peripheral used to talk to the modem.
@@ -2970,7 +3059,6 @@ private:
     static inline WalterModemOperator _operator = {};
 
 #pragma region CONTEXTS
-
     /**
      * @brief The PDP context which is currently in use by the library or NULL when no PDP
      * context is in use. In use doesn't mean that the context is activated yet it is just a
@@ -3011,6 +3099,26 @@ private:
      * use.
      */
     static inline WalterModemSocket *_socket = NULL;
+
+    /**
+     * @brief The task in which AT commands and responses are handled.
+     */
+    static inline TaskHandle_t _ringQueueTask;
+
+    /**
+     * @brief Handle used to manage the queue processing task stack.
+     */
+    static inline StaticTask_t _ringQueueTaskBuf;
+
+    /**
+     * @brief The statically allocated queue processing task stack memory.
+     */
+    static inline StackType_t _ringQueueTaskStack[WALTER_MODEM_TASK_STACK_SIZE];
+
+    /**
+     * @brief The Socket ring URC queue.
+     */
+    static inline WalterModemSocketRingQueue _ringQueue = {};
 #endif
 
 #if CONFIG_WALTER_MODEM_ENABLE_GNSS
@@ -3021,11 +3129,11 @@ private:
 #endif
 #pragma endregion
 
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /*
      * @brief The current BlueCherry state.
      */
-    static inline WalterModemBlueCherryState blueCherry;
+    static inline WalterModemBlueCherryState _blueCherry = {};
 #endif
 
 #pragma region MOTA
@@ -3222,6 +3330,24 @@ private:
      * @return None.
      */
     static void _socketRelease(WalterModemSocket *sock);
+
+    /**
+     * @brief this function retrieves and updates all the socketStates
+     *
+     * @return True on success, false on error.
+     */
+    static bool _socketUpdateStates();
+
+    /**
+     * @brief This is the entrypoint of the ring queue processing task.
+     *
+     * The WalterModem library relies on a seperate task for handeling ring messages from the modem
+     *
+     * @param args A NULL pointer.
+     *
+     * @return None.
+     */
+    static void _ringQueueProcessingTask(void *args);
 #endif
 #pragma endregion
 
@@ -3289,6 +3415,14 @@ private:
      * @param len The number of bytes in the rxData buffer.
      */
     static size_t _getCRLFPosition(const char *rxData, size_t len);
+
+    /**
+     * @brief Check the parser buffer for a message containing payload data.
+     *
+     * @return true if addintional payload data is expected, false otherwise.
+     */
+    static bool _expectingPayload();
+
     /**
      * @brief Parse incoming modem data.
      *
@@ -3433,7 +3567,7 @@ private:
     static void _processQueueRsp(WalterModemCmd *cmd, WalterModemBuffer *rsp);
 #pragma endregion
 
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /**
      * @brief Process an incoming BlueCherry event.
      *
@@ -3445,11 +3579,51 @@ private:
      *
      * @return Whether we should emit an error BC event on next sync.
      */
-    static bool _processBlueCherryEvent(uint8_t *data, uint8_t len);
+    static bool _blueCherryProcessEvent(uint8_t *data, uint8_t len);
+    
+    /**
+     * @brief Configure a UDP socket to connect to the bluecherry cloud.
+     * 
+     * @return True if successfully configured a socket, False if not.
+     */
+    static bool _blueCherrySocketConfigure();
+
+    /**
+     * @brief Connect to bluecherry with a socket.
+     * 
+     * @return True if successfully configured, dialed or resumed a socket. False if unable
+     * to establish a connection.
+     */
+    static bool _blueCherrySocketConnect();
+
+    /**
+     * @brief The custom socket event handler for bluecherry communications.
+     */
+    static void _blueCherrySocketEventHandler(WalterModemSocketEvent event, uint16_t dataReceived, uint8_t *dataBuffer);
+
+    /**
+     * @brief Write the outgoing buffer's CoAP headers and set them accordingly.
+     */
+    static void _blueCherrySetCoapHeaders(uint8_t code, uint8_t tokenLen, uint16_t msgId);
+
+    /**
+     * @brief Send data to bluecherry over a UDP socket using a custom tailored CoAP protocol.
+     * 
+     * @return True on successfull transmission and received acknowledgement. False when no
+     * acknowledgement was received in the CoAP timeout period.
+     */
+    static bool _blueCherryCoapSend();
+
+    /**
+     * @brief Process the incoming bluecherry CoAP datagram.
+     *  
+     * @return True if successfully processed the datagram, False if malformed.
+     */
+    static bool _blueCherryCoapProcessResponse(uint16_t dataReceived, uint8_t *dataBuffer);
 #endif
 
 #pragma region OTA
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY && CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY && CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /**
      * @brief Process OTA init event
      *
@@ -3516,7 +3690,7 @@ private:
      */
     static bool _motaFormatAndMount(void);
 
-    #if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+    #if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /**
      * @brief Initialze a modem firmware update.
      *
@@ -3787,13 +3961,13 @@ public:
      * call tickleWatchdog before the timeout expires. This helps you guard against programming
      * errors, although it is still possible a part of your code never gets executed while
      * always tickling the watchdog in time. It also guards against bugs in the walter modem
-     * library that would cause it to block for too long. The minimum supported timeout is 40
-     * seconds. Note that a watchdog timer may be set in the compile options, triggered by a
+     * library that would cause it to block for too long. A minimum timeout of 300 is enforced.
+     * Note that a watchdog timer may be set in the compile options, triggered by a
      * starting idle task. This is usually sufficient for simple programs.
      *
      * @return True on success, false on error.
      */
-    static bool begin(HardwareSerial *uart, uint8_t watchdogTimeout = 0);
+    static bool begin(HardwareSerial *uart, uint16_t watchdogTimeout = 0);
 #else
     /**
      * @brief Initialize the modem.
@@ -3807,13 +3981,13 @@ public:
      * call tickleWatchdog before the timeout expires. This helps you guard against programming
      * errors, although it is still possible a part of your code never gets executed while
      * always tickling the watchdog in time. It also guards against bugs in the walter modem
-     * library that would cause it to block for too long. The minimum supported timeout is 40
-     * seconds. Note that a watchdog timer may be set in the compile options, triggered by a
+     * library that would cause it to block for too long. A minimum timeout of 300 is enforced.
+     * Note that a watchdog timer may be set in the compile options, triggered by a
      * starting idle task. This is usually sufficient for simple programs.
      *
      * @return True on success, false on error.
      */
-    static bool begin(uart_port_t uartNo, uint8_t watchdogTimeout = 0);
+    static bool begin(uart_port_t uartNo, uint16_t watchdogTimeout = 0);
 #endif
 #pragma endregion
 
@@ -4047,7 +4221,7 @@ public:
      * This function configures an mqtt client, without connecting.
      *
      * @param clientId MQTT client id to be used
-     * @param userName Username for auth
+     * @param username Username for auth
      * @param password Password for auth
      * @param tlsProfileId TLS profile id to be used
      *
@@ -4055,7 +4229,7 @@ public:
      */
     static bool mqttConfig(
         const char *clientId = "walter-mqtt-client",
-        const char *userName = NULL,
+        const char *username = NULL,
         const char *password = NULL,
         uint8_t tlsProfileId = 0);
 
@@ -4271,6 +4445,7 @@ public:
         WalterModemHttpQueryCmd httpQueryCmd = WALTER_MODEM_HTTP_QUERY_CMD_GET,
         char *contentTypeBuf = NULL,
         uint16_t contentTypeBufSize = 0,
+        const char* extraHeaderLine = NULL,
         WalterModemRsp *rsp = NULL,
         walterModemCb cb = NULL,
         void *args = NULL);
@@ -4325,8 +4500,8 @@ public:
 #endif
 #pragma endregion
 
-#pragma region BLUE_CHERRY
-#if CONFIG_WALTER_MODEM_ENABLE_BLUE_CHERRY
+#pragma region BLUECHERRY
+#if CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
     /**
      * @brief Upload BlueCherry credentials to the modem.
      *
@@ -4634,6 +4809,7 @@ public:
      * @param exchangeTimeout The maximum number of seconds this socket can be inactive.
      * @param connTimeout The maximum number of seconds this socket can try to connect.
      * @param sendDelayMs The number of milliseconds send delay.
+     * @param socketId The socket identifier. -1 to reserve a new one.
      *
      * @return True on success, false otherwise.
      */
@@ -4645,12 +4821,13 @@ public:
         uint16_t mtu = 300,
         uint16_t exchangeTimeout = 90,
         uint16_t connTimeout = 60,
-        uint16_t sendDelayMs = 5000);
+        uint16_t sendDelayMs = 5000,
+        int socketId = -1);
 
     /**
-     * @brief Configure the socket extended parameters
+     * @brief Configure the socket extended parameters.
      *
-     * This function confiures the sockett extended parameters.
+     * This function configures the socket extended parameters.
      *
      * @param rsp Optional modem response structure to save the result in.
      * @param cb Optional callback function, if set this function will not block.
@@ -4669,11 +4846,34 @@ public:
         walterModemCb cb = NULL,
         void *args = NULL,
         int socketId = -1,
-        WalterModemSocketRingMode ringMode = WALTER_MODEM_SOCKET_RING_MODE_DATA_VIEW,
+        WalterModemSocketRingMode ringMode = WALTER_MODEM_SOCKET_RING_MODE_DATA_AMOUNT,
         WalterModemSocketRecvMode recvMode = WALTER_MODEM_SOCKET_RECV_MODE_TEXT,
         int keepAlive = 0,
         WalterModemSocketListenMode listenMode = WALTER_MODEM_SOCKET_LISTEN_MODE_DISABLED,
         WalterModemsocketSendMode sendMode = WALTER_MODEM_SOCKET_SEND_MODE_TEXT);
+    
+    /**
+     * @brief Enable or disable (D)TLS on a socket.
+     * 
+     * This function will enable or disable (D)TLS on a socket. This can only be done when
+     * the socket is not connected.
+     * 
+     * @param rsp Optional modem response structure to save the result in.
+     * @param cb Optional callback function, if set this function will not block.
+     * @param args Optional argument to pass to the callback.
+     * @param socketId The id of the socket to connect or -1 to re-use the last one.
+     * @param profileId The TLS profile id to use.
+     * @param enableTLS True to enable TLS, false to disable it.
+     * 
+     * @return True on success, false otherwise.
+     */
+    static bool socketConfigSecure(
+        bool enableTLS,
+        int profileId = 1,
+        int socketId = -1,
+        WalterModemRsp *rsp = NULL,
+        walterModemCb cb = NULL,
+        void *args = NULL);
 
     /**
      * @brief Dial a socket after which data can be exchanged.
@@ -4717,6 +4917,8 @@ public:
      * @param socketId The id of the socket to close or -1 to re-use the last one.
      *
      * @return True on success, false otherwise.
+     * 
+     * @note The socket needs to be closed to free it, even tough it is in a closed state as this is the modem state.
      */
     static bool socketClose(
         WalterModemRsp *rsp = NULL, walterModemCb cb = NULL, void *args = NULL, int socketId = -1);
@@ -4814,62 +5016,82 @@ public:
         WalterModemSocketListenState listenState = WALTER_MODEM_SOCKET_LISTEN_STATE_IPV4,
         int socketListenPort = 0);
 
-    /**
-     * @brief check if the Socket received a Ring URC.
-     *
-     * @param socketId  The id of the socket to wait for the ring or -1 to re-use the last one.
-     * @param targetBufSize The size of the targetBuffer.
-     * @param targetBuf The targetBuffer to store the received data in.abort
-     *
-     * @return True on success, false otherwise.
-     *
-     * @warning The target buffer will only be filled when ringMode is set to
-     * WALTER_MODEM_SOCKET_RING_MODE_DATA_VIEW in socketConfigExtended.
-     */
-    static bool socketDidRing(
-        int socketId = -1, uint8_t targetBUfSize = 0, uint8_t *targetBuf = nullptr);
+    static uint16_t socketAvailable(int socketId = -1);
 
     /**
      * @brief Receive data from an incomming socket connection
      *
+     * @param receiveCount the amount of bytes to receive.
      * @param targetBufSize The size of the target buffer.
      * @param targetBuf The target buffer to write the data to
      * @param socketId The socket id to receive from.
      * @param rsp Optional modem response structure to save the result in.
      *
      * @return True on success, false otherwise.
+     * 
+     * @warning the receiveCount cannot be larger then the amount of bytes left to receive (use event handler to keep track of the available bytes)
      */
     static bool socketReceive(
-        uint16_t targetBufSize, uint8_t *targetBuf, int socketId = -1, WalterModemRsp *rsp = NULL);
+        uint16_t receiveCount,
+        size_t targetBufSize,
+        uint8_t *targetBuf,
+        int socketId = -1,
+        WalterModemRsp *rsp = NULL
+    );
+
+    /**
+     * @brief This function updates all the socketStates and returns the current state for the
+     * requested socket.
+     *
+     * @param socketId The socket id to retrieve the current state.
+     *
+     * @return The socket state.
+     *
+     */
+    static WalterModemSocketState socketGetState(int socketId = 0);
+
+    /**
+     * @brief this function resumes a suspended socketConnection.
+     *
+     * @param sockeId the id of the UDP socket to resume.
+     * @param rsp Optional modem response structure to save the result in.
+     *
+     * @return True on success, false otherwise.
+     */
+    static bool socketResume(
+        int socketId = -1,
+        WalterModemRsp *rsp = NULL,
+        walterModemCb cb = NULL,
+        void *args = NULL);
 #endif
 #pragma endregion
 
 #pragma region GNSS
 #if CONFIG_WALTER_MODEM_ENABLE_GNSS
-    /**
-     * @brief Configure Walter's GNSS receiver.
-     *
-     * This function will configure the GNSS receiver. The settings are persistent over reboots
-     * but it could be that they need to be set again after a modem firmware upgrade. Inbetween
-     * fixes this function could be used to change the sensitivity mode. It is recommended to
-     * run this function at least once before GNSS is used.
-     *
-     * @param sensMode The sensitivity mode.
-     * @param acqMode The acquisition mode.
-     * @param locMode The GNSS location mode.
-     * @param rsp Optional modem response structure to save the result in.
-     * @param cb Optional callback function, if set this function will not block.
-     * @param args Optional argument to pass to the callback.
-     *
-     * @return True on success, false on error.
-     */
-    static bool gnssConfig(
-        WalterModemGNSSSensMode sensMode = WALTER_MODEM_GNSS_SENS_MODE_HIGH,
-        WalterModemGNSSAcqMode acqMode = WALTER_MODEM_GNSS_ACQ_MODE_COLD_WARM_START,
-        WalterModemGNSSLocMode locMode = WALTER_MODEM_GNSS_LOC_MODE_ON_DEVICE_LOCATION,
-        WalterModemRsp *rsp = NULL,
-        walterModemCb cb = NULL,
-        void *args = NULL);
+        /**
+         * @brief Configure Walter's GNSS receiver.
+         *
+         * This function will configure the GNSS receiver. The settings are persistent over reboots
+         * but it could be that they need to be set again after a modem firmware upgrade. Inbetween
+         * fixes this function could be used to change the sensitivity mode. It is recommended to
+         * run this function at least once before GNSS is used.
+         *
+         * @param sensMode The sensitivity mode.
+         * @param acqMode The acquisition mode.
+         * @param locMode The GNSS location mode.
+         * @param rsp Optional modem response structure to save the result in.
+         * @param cb Optional callback function, if set this function will not block.
+         * @param args Optional argument to pass to the callback.
+         *
+         * @return True on success, false on error.
+         */
+        static bool gnssConfig(
+            WalterModemGNSSSensMode sensMode = WALTER_MODEM_GNSS_SENS_MODE_HIGH,
+            WalterModemGNSSAcqMode acqMode = WALTER_MODEM_GNSS_ACQ_MODE_COLD_WARM_START,
+            WalterModemGNSSLocMode locMode = WALTER_MODEM_GNSS_LOC_MODE_ON_DEVICE_LOCATION,
+            WalterModemRsp *rsp = NULL,
+            walterModemCb cb = NULL,
+            void *args = NULL);
 
     /**
      * @brief Get the current GNSS assistance data status.

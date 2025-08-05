@@ -45,6 +45,7 @@
 
 #include <WalterDefines.h>
 #include <WalterModem.h>
+#include <esp_log.h>
 
 #if CONFIG_WALTER_MODEM_ENABLE_SOCKETS
     #pragma region PRIVATE_METHODS
@@ -92,6 +93,34 @@ void WalterModem::_socketRelease(WalterModemSocket *sock)
     sock->state = WALTER_MODEM_SOCKET_STATE_FREE;
 }
 
+bool WalterModem::_socketUpdateStates()
+{
+    WalterModemRsp *rsp = NULL;
+    walterModemCb cb = NULL;
+    void *args = NULL;
+
+    _runCmd({"AT+SQNSS?"}, "OK", rsp, cb, args);
+    _returnAfterReply();
+}
+void WalterModem::_ringQueueProcessingTask(void *args)
+{
+    WalterModemSocketRing ring{};
+    TickType_t blockTime = pdMS_TO_TICKS(1000);
+    uint8_t data[1500];
+    while(true) 
+    {
+        if (xQueueReceive(_ringQueue.handle, &ring, blockTime) == pdTRUE) {
+            socketReceive(ring.ringSize, sizeof(data), data, ring.profileId);
+            _dispatchEvent(WALTER_MODEM_SOCKET_EVENT_RING, ring.profileId,ring.ringSize, data);
+#ifdef CONFIG_WALTER_MODEM_ENABLE_BLUECHERRY
+            if(ring.profileId == _blueCherry.bcSocketId) {
+                _blueCherrySocketEventHandler(WALTER_MODEM_SOCKET_EVENT_RING, ring.ringSize, data);
+            }
+#endif
+        }
+    }
+}
+
 void WalterModem::_dispatchEvent(
     WalterModemSocketEvent event, int socketId, uint16_t dataReceived, uint8_t *dataBuffer)
 {
@@ -115,12 +144,21 @@ bool WalterModem::socketConfig(
     uint16_t mtu,
     uint16_t exchangeTimeout,
     uint16_t connTimeout,
-    uint16_t sendDelayMs)
+    uint16_t sendDelayMs,
+    int socketId)
 {
-    WalterModemSocket *sock = _socketReserve();
+    WalterModemSocket *sock = NULL;
+
+    if (socketId == -1) {
+        sock = _socketReserve();
+    } else {
+        sock = _socketGet(socketId);
+    }
+
     if (sock == NULL) {
         _returnState(WALTER_MODEM_STATE_NO_FREE_SOCKET);
     }
+
 
     sock->pdpContextId = pdpCtxId;
     sock->mtu = mtu;
@@ -196,6 +234,30 @@ bool WalterModem::socketConfigExtended(
         args,
         NULL,
         sock);
+    _returnAfterReply();
+}
+
+bool WalterModem::socketConfigSecure(
+    bool enableTLS,
+    int profileId,
+    int socketId,
+    WalterModemRsp *rsp,
+    walterModemCb cb,
+    void *args)
+{
+    WalterModemSocket *sock = _socketGet(socketId);
+    if (sock == NULL) {
+        _returnState(WALTER_MODEM_STATE_NO_SUCH_SOCKET);
+    }
+
+    _runCmd(
+        arr("AT+SQNSSCFG=", _digitStr(sock->id), ",", enableTLS ? "1" : "0",
+            ",", _digitStr(profileId)),
+        "OK",
+        rsp,
+        cb,
+        args,
+        NULL);
     _returnAfterReply();
 }
 
@@ -285,7 +347,7 @@ bool WalterModem::socketSend(
     if (sock == NULL) {
         _returnState(WALTER_MODEM_STATE_NO_SUCH_SOCKET);
     }
-
+    
     _runCmd(
         arr("AT+SQNSSENDEXT=", _digitStr(sock->id), ",", _atNum(dataSize), ",", _digitStr(rai)),
         "OK",
@@ -306,7 +368,8 @@ bool WalterModem::socketSend(
     return socketSend((uint8_t *)str, strlen(str), rsp, cb, args, rai, socketId);
 }
 
-bool WalterModem::socketAccept(WalterModemRsp *rsp, walterModemCb cb, void *args, int socketId, bool commandMode)
+bool WalterModem::socketAccept(
+    WalterModemRsp *rsp, walterModemCb cb, void *args, int socketId, bool commandMode)
 {
     WalterModemSocket *sock = _socketGet(socketId);
     if (sock == NULL) {
@@ -374,29 +437,21 @@ bool WalterModem::socketListen(
     }
 }
 
-bool WalterModem::socketDidRing(int socketId, uint8_t targetBufSize, uint8_t *targetBuf)
+uint16_t WalterModem::socketAvailable(int socketId)
 {
-    WalterModemRsp *rsp = NULL;
-    walterModemCb cb = NULL;
-    void *args = NULL;
-
     WalterModemSocket *sock = _socketGet(socketId);
     if (sock == NULL) {
-        _returnState(WALTER_MODEM_STATE_NO_SUCH_SOCKET);
+        return 0;
     }
-
-    if (sock->didRing) {
-        if (targetBuf != nullptr && targetBufSize != 0) {
-            memcpy(targetBuf, sock->data, targetBufSize);
-            return true;
-        }
-    }
-
-    return false;
+    return  sock->dataAvailable;
 }
 
 bool WalterModem::socketReceive(
-    uint16_t targetBufSize, uint8_t *targetBuf, int socketId, WalterModemRsp *rsp)
+    uint16_t receiveCount,
+    size_t targetBufSize,
+    uint8_t *targetBuf,
+    int socketId,
+    WalterModemRsp *rsp)
 {
     /* this is by definition a blocking call without callback.
      * it is only used when the arduino user is not taking advantage of
@@ -404,28 +459,68 @@ bool WalterModem::socketReceive(
      */
     walterModemCb cb = NULL;
     void *args = NULL;
-
+    uint16_t dataToRead;
     WalterModemSocket *sock = _socketGet(socketId);
     if (sock == NULL) {
         _returnState(WALTER_MODEM_STATE_NO_SUCH_SOCKET);
     }
 
-    if (targetBufSize > 1500) {
+    if (targetBufSize < receiveCount || receiveCount > 1500) {
         _returnState(WALTER_MODEM_STATE_NO_MEMORY);
     }
-    _receiving = true;
-    _receiveExpected = sock->dataReceived;
+
+    dataToRead = (receiveCount > sock->dataAvailable) ? sock->dataAvailable : receiveCount;
+
+    if (dataToRead == 0) {
+        return true;
+    }
+
+    sock->dataAvailable -= dataToRead;
+
+    // The number of received bytes attempts to be read from within the RX parser.
+    // This will be used as a fallback if it cannot read it.
+    _expectedPayloadSize = dataToRead;
     _runCmd(
-        arr("AT+SQNSRECV=", _digitStr(sock->id), ",", _atNum(targetBufSize)),
-        "OK",
+        arr("AT+SQNSRECV=", _digitStr(sock->id), ",", _atNum(receiveCount)),
+        "+SQNSRECV:",
         rsp,
         cb,
         args,
         NULL,
         NULL,
-        WALTER_MODEM_CMD_TYPE_TX_WAIT,
+        WALTER_MODEM_CMD_TYPE_DATA_TX_WAIT,
         targetBuf,
         targetBufSize);
+    _returnAfterReply();
+}
+
+WalterModemSocketState WalterModem::socketGetState(int socketId)
+{
+    if(!_socketUpdateStates()){
+        ESP_LOGW("WalterModem", "Could not update socket states");
+    }
+
+    if (socketId == 0) {
+        return WalterModemSocketState::WALTER_MODEM_SOCKET_STATE_FREE;
+    }
+
+    WalterModemSocket *sock = _socketGet(socketId);
+    if (sock == NULL) {
+        return WalterModemSocketState::WALTER_MODEM_SOCKET_STATE_FREE;
+    }
+
+    return sock->state;
+}
+
+bool WalterModem::socketResume(
+    int socketId, WalterModemRsp *rsp, walterModemCb cb, void *args)
+{
+    WalterModemSocket *sock = _socketGet(socketId);
+    if (sock == NULL) {
+        _returnState(WALTER_MODEM_STATE_NO_SUCH_SOCKET);
+    }
+
+    _runCmd(arr("AT+SQNSO", _digitStr(sock->id)),"OK",rsp,cb,args);
     _returnAfterReply();
 }
 
@@ -434,5 +529,6 @@ void WalterModem::socketSetEventHandler(walterModemSocketEventHandler handler, v
     _eventHandlers[WALTER_MODEM_EVENT_TYPE_SOCKET].socketHandler = handler;
     _eventHandlers[WALTER_MODEM_EVENT_TYPE_SOCKET].args = args;
 }
+
     #pragma endregion
 #endif
