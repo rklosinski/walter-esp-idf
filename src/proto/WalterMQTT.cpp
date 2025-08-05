@@ -84,31 +84,28 @@ WalterModemMqttStatus WalterModem::getMqttStatus()
 }
 
 bool WalterModem::mqttConfig(
-    const char *clientId, const char *userName, const char *password, uint8_t tlsProfileId)
+    const char *clientId, const char *username, const char *password, uint8_t tlsProfileId)
 {
     WalterModemRsp *rsp = NULL;
     walterModemCb cb = NULL;
     void *args = NULL;
 
-    WalterModemBuffer *stringsBuffer = _getFreeBuffer();
-    stringsBuffer->size +=
-        sprintf((char *)stringsBuffer->data, "AT+SQNSMQTTCFG=0,\"%s\"", clientId);
+    WalterModemBuffer *buf = _getFreeBuffer();
+    buf->size += sprintf((char*) buf->data, "AT+SQNSMQTTCFG=0,\"%s\"", clientId);
 
-    if (userName && password) {
-        stringsBuffer->size += sprintf(
-            (char *)stringsBuffer->data + stringsBuffer->size,
-            ",\"%s\",\"%s\"",
-            userName,
-            password);
-    } else {
-        stringsBuffer->size += sprintf((char *)stringsBuffer->data + stringsBuffer->size, ",,");
+    if(username && password) {
+        buf->size += sprintf((char*)buf->data + buf->size,",\"%s\",\"%s\"", username, password);
     }
 
-    if (tlsProfileId > 0) {
-        stringsBuffer->size +=
-            sprintf((char *)stringsBuffer->data + stringsBuffer->size, ",%u", tlsProfileId);
+    if(tlsProfileId > 0) {
+        if(!(username && password)) {
+            buf->size += sprintf((char*) buf->data + buf->size, ",,");
+        }
+
+        buf->size += sprintf((char*) buf->data + buf->size, ",%u", tlsProfileId);
     }
-    _runCmd(arr((const char *)stringsBuffer->data), "OK", rsp, cb, args);
+    
+    _runCmd(arr((const char*) buf->data), "OK", rsp, cb, args);
     _returnAfterReply();
 }
 
@@ -230,7 +227,6 @@ bool WalterModem::mqttDidRing(
     if (targetBufSize < _mqttRings[idx].length) {
         _returnState(WALTER_MODEM_STATE_NO_MEMORY);
     }
-    _receiving = true;
 
     if (_mqttRings[idx].qos == 0) {
         /* no msg id means qos 0 message */
@@ -241,7 +237,7 @@ bool WalterModem::mqttDidRing(
             cb,
             args,
             NULL,
-            (void *)idx,
+            (void *)(uintptr_t)idx,
             WALTER_MODEM_CMD_TYPE_TX_WAIT,
             targetBuf,
             _mqttRings[idx].length);
@@ -255,7 +251,7 @@ bool WalterModem::mqttDidRing(
             cb,
             args,
             NULL,
-            (void *)idx,
+            (void *)(uintptr_t)idx,
             WALTER_MODEM_CMD_TYPE_TX_WAIT,
             targetBuf,
             _mqttRings[idx].length);

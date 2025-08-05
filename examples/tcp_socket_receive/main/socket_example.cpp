@@ -66,12 +66,12 @@ CONFIG_UINT16(SEND_DELAY_MS, 10000)
 /**
  * @brief The address of the Walter demo server.
  */
-CONFIG(SERV_ADDR, const char *, "walterdemo.quickspot.io")
+CONFIG(SERV_ADDR, const char *, "example.com")
 
 /**
  * @brief The UDP port of the Walter demo server.
  */
-CONFIG_INT(SERV_PORT, 1999)
+CONFIG_INT(SERV_PORT, 80)
 
 /**
  * @brief ESP-IDF log prefix.
@@ -92,12 +92,9 @@ WalterModemRsp rsp;
  * @brief The buffer to transmit to the demo server. The first 6 bytes will be
  * the MAC address of the Walter this code is running on.
  */
-uint8_t dataBuf[8] = {0};
+uint8_t dataBuf[1500] = {0};
 
-/**
- * @brief Incrementing counter value sent as payload data.
- */
-uint16_t counter = 0;
+uint16_t dataAvailable = 0;
 
 /**
  * @brief This function checks if we are connected to the lte network
@@ -130,15 +127,6 @@ bool waitForNetwork()
     return true;
 }
 
-void mySocketEventHandler(
-    WalterModemSocketEvent ev, int socketId, uint16_t dataReceived, uint8_t *dataBuffer, void *args)
-{
-    if (ev == WALTER_MODEM_SOCKET_EVENT_RING) {
-        ESP_LOGI(TAG, "received ring message (%u bytes)", dataReceived);
-        ESP_LOGI(TAG, "Data: %.*s", dataReceived, dataBuffer); // error in C++
-    }
-}
-
 /**
  * @brief This function tries to connect the modem to the cellular network.
  * @return true if the connection attempt is successful, else false.
@@ -147,6 +135,13 @@ bool lteConnect()
 {
     if (modem.setOpState(WALTER_MODEM_OPSTATE_NO_RF)) {
         ESP_LOGI(TAG, "Successfully set operational state to NO RF");
+    } else {
+        ESP_LOGI(TAG, "Could not set operational state to NO RF");
+        return false;
+    }
+
+    if (modem.setRadioBands(WalterModemRAT::WALTER_MODEM_RAT_LTEM, WALTER_MODEM_BAND_B20)) {
+        ESP_LOGI(TAG, "Succesfully set the radio band");
     } else {
         ESP_LOGI(TAG, "Could not set operational state to NO RF");
         return false;
@@ -209,8 +204,6 @@ extern "C" void app_main(void)
         return;
     }
 
-    modem.socketSetEventHandler(mySocketEventHandler,NULL);
-
     /* Construct a socket */
     if (modem.socketConfig(&rsp)) {
         ESP_LOGI(TAG, "Created a new socket");
@@ -227,8 +220,17 @@ extern "C" void app_main(void)
         return;
     }
 
+    /* Construct a socket */
+    if (modem.socketConfigExtended(&rsp)) {
+        ESP_LOGI(TAG, "Defined socket extended config params");
+    } else {
+        ESP_LOGE(TAG, "Could not define socket extended config params");
+        return;
+    }
+
     /* Connect to the demo server */
-    if (modem.socketDial(SERV_ADDR, SERV_PORT)) {
+    if (modem.socketDial(
+            SERV_ADDR, SERV_PORT, 0, NULL, NULL, NULL, WALTER_MODEM_SOCKET_PROTO_TCP)) {
         ESP_LOGI(TAG, "Connected to demo server %s:%d", SERV_ADDR, SERV_PORT);
     } else {
         ESP_LOGE(TAG, "Could not connect demo socket");
@@ -236,17 +238,21 @@ extern "C" void app_main(void)
     }
 
     for (;;) {
-        dataBuf[6] = counter >> 8;
-        dataBuf[7] = counter & 0xFF;
-
-        if (modem.socketSend(dataBuf, 8)) {
-            ESP_LOGI(TAG, "Transmitted counter value %d", counter);
-            counter += 1;
+        if (modem.socketSend((char *)"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")) {
+            ESP_LOGI(TAG, "Transmitted GET request");
         } else {
-            ESP_LOGE(TAG, "Could not transmit data");
+            ESP_LOGE(TAG, "Could not transmit GET request");
             esp_restart();
         }
 
         vTaskDelay(pdMS_TO_TICKS(SEND_DELAY_MS));
+        while (modem.socketAvailable() > 0) {
+            // 1500 is the max amount of bytes the modem can read at a time.
+            uint16_t dataToRead = (modem.socketAvailable() > 1500) ? 1500 : modem.socketAvailable();
+            ESP_LOGI(TAG,"Reading: %u bytes",dataToRead);
+            if (modem.socketReceive(dataToRead, sizeof(dataBuf), dataBuf)) {
+                ESP_LOGI(TAG, "Remaining: %u | Data: %.*s", modem.socketAvailable(), dataToRead, dataBuf);
+            }
+        }
     }
 }
